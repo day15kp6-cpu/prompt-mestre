@@ -1,0 +1,1 @@
+{ "name": "prompt-mestre", "version": "0.1.0", "description": "Botão Prompt mestre: reescreve o pedido digitado para ficar mais assertivo antes de enviar.", "types": "./types/index.d.ts" }

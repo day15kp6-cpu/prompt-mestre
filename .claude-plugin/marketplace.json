@@ -1,0 +1,5 @@
+{
+  "name": "prompt-mestre",
+  "owner": { "name": "day15kp6-cpu" },
+  "plugins": [{ "name": "prompt-mestre", "source": "./" }]
+}
