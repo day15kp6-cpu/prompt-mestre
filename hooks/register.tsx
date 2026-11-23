@@ -2,10 +2,18 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 const status = atom({ plugin: 'prompt-mestre', key: 'status' } as const, '')
+// Texto digitado antes da última alteração do mod; vazio = nada a desfazer.
+const original = atom({ plugin: 'prompt-mestre', key: 'original' } as const, '')
 
-const SYSTEM = `Você é um engenheiro de prompts. Reescreva o pedido do usuário para um assistente de código (Claude Code) de forma mais assertiva e completa.
-Regras: mantenha o idioma do usuário (português se for português); preserve toda a intenção, nomes, caminhos e números; não invente fatos nem requisitos; deixe explícitos objetivo, contexto, restrições e critério de pronto, só quando já estiverem implícitos no pedido; se algo essencial faltar, acrescente uma linha "Se faltar informação, pergunte antes de agir."; seja conciso.
-Responda SOMENTE com o prompt melhorado, sem comentários, sem aspas, sem markdown em volta.`
+const SEPARADOR = '--- Responda para eu melhorar o pedido ---'
+
+const SYSTEM = `Você é um engenheiro de prompts. Melhore o pedido do usuário para um assistente de código (Claude Code).
+Regras: mantenha o idioma do usuário; preserve toda a intenção, nomes, caminhos e números; não invente fatos nem requisitos; deixe explícitos objetivo, contexto, restrições e critério de pronto, só quando já estiverem implícitos no pedido; seja conciso.
+Se o texto terminar com um bloco "${SEPARADOR}", ele traz perguntas que você fez antes e as respostas do usuário: incorpore as respostas ao pedido e descarte o bloco.
+Formato da resposta, SEMPRE na primeira linha:
+- "PROMPT:" e, na linha seguinte, o prompt melhorado, quando o pedido já dá para agir (mesmo que falte detalhe menor);
+- "PERGUNTAS:" e, nas linhas seguintes, de 2 a 3 perguntas curtas iniciadas por "- ", só quando falta algo essencial e agir seria chute (objetivo, alvo ou arquivo indefinidos).
+Nada além disso: sem comentários, sem aspas, sem markdown em volta.`
 
 let isBusy = false
 
@@ -27,12 +35,35 @@ async function improve($: any) {
     timeoutMs: 60000,
   })
   isBusy = false
-  if (!r.isAnswered || !r.text.trim()) {
+  const reply = r.isAnswered ? r.text.trim() : ''
+  const isQuestions = /^PERGUNTAS:/i.test(reply)
+  const body = reply.replace(/^(PROMPT|PERGUNTAS):\s*/i, '').trim()
+  if (!body) {
     await update($, status, () => 'Não consegui melhorar; tente de novo')
     return
   }
-  await $.prompt.fill({ text: r.text.trim(), mode: 'replace' })
-  await update($, status, () => 'Pronto: revise e envie')
+  const next = isQuestions ? `${text.trimEnd()}\n\n${SEPARADOR}\n${body}\n` : body
+  const filled = await $.prompt.fill({ text: next, mode: 'replace' })
+  if (!filled.isFilled) {
+    await update($, status, () => 'Não consegui escrever na caixa; tente de novo')
+    return
+  }
+  await update($, original, () => text)
+  await update($, status, () =>
+    isQuestions ? 'Faltam informações: responda abaixo e clique de novo' : 'Pronto: revise e envie',
+  )
+}
+
+async function undo($: any) {
+  const text = await read($, original)
+  if (!text) return
+  const filled = await $.prompt.fill({ text, mode: 'replace' })
+  if (!filled.isFilled) {
+    await update($, status, () => 'Não consegui desfazer; tente de novo')
+    return
+  }
+  await update($, original, () => '')
+  await update($, status, () => 'Pedido original restaurado')
 }
 
 export const register: Register = on => {
@@ -49,10 +80,12 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const msg = await read($, status)
+    const hasUndo = (await read($, original)) !== ''
     const { Box, Button, Text } = $.ui.resolve(e)
     return (
       <Box>
         <Button key="mestre" label="✨ Prompt mestre" onPress={() => improve($)} />
+        {hasUndo ? <Button key="desfazer" label="↩ Desfazer" onPress={() => undo($)} /> : null}
         {msg ? <Text dimColor> {msg}</Text> : null}
       </Box>
     )
